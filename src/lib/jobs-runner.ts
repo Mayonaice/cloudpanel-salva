@@ -1,4 +1,4 @@
-import { withConnection } from "./storage-context";
+import { tenantScope, withConnection } from "./storage-context";
 import { z } from "zod";
 import { and, eq, isNull, lte, or } from "drizzle-orm";
 import { getDb } from "./db";
@@ -64,6 +64,10 @@ const cleanupPayload = z.object({
 });
 const reconcilePayload = z.object({ ownerId: uuid });
 
+type PurgePayload = z.infer<typeof purgePayload>;
+type CleanupPayload = z.infer<typeof cleanupPayload>;
+type ReconcilePayload = z.infer<typeof reconcilePayload>;
+
 function queryNumber(value: string | null): number | undefined {
   if (value === null || value.trim() === "") return undefined;
   const parsed = Number(value);
@@ -94,28 +98,30 @@ function permanentPayload(): never {
   throw new PermanentJobError();
 }
 
-async function processPurge(payload: unknown): Promise<void> {
-  const parsed = purgePayload.safeParse(payload);
+function parsePayload<T extends z.ZodType>(schema: T, payload: unknown): z.infer<T> {
+  const parsed = schema.safeParse(payload);
   if (!parsed.success) permanentPayload();
+  return parsed.data;
+}
+
+async function processPurge(payload: PurgePayload): Promise<void> {
   // Recheck retention atomically: a restored/re-trashed file must not be
   // removed by an older queued cleanup job.
   const [staged] = await getDb().update(files).set({ status: "purge_pending", updatedAt: new Date() }).where(and(
-    eq(files.ownerId, parsed.data.ownerId), eq(files.id, parsed.data.fileId),
+    tenantScope(files, payload.ownerId), eq(files.id, payload.fileId),
     or(eq(files.status, "purge_pending"), and(eq(files.status, "trashed"), lte(files.trashedAt, trashCutoff())))
   )).returning();
   if (!staged) return;
   await deleteObject(staged.objectKey);
   // A concurrent retry may have finalized the row already; a null result is
   // therefore an idempotent success, not a reason to delete again.
-  await finalizePurge(parsed.data.ownerId, parsed.data.fileId);
+  await finalizePurge(payload.ownerId, payload.fileId);
 }
 
-async function processMultipartCleanup(payload: unknown): Promise<void> {
-  const parsed = cleanupPayload.safeParse(payload);
-  if (!parsed.success) permanentPayload();
-  const sessionId = parsed.data.uploadSessionId ?? parsed.data.sessionId ?? parsed.data.uploadId;
+async function processMultipartCleanup(payload: CleanupPayload): Promise<void> {
+  const sessionId = payload.uploadSessionId ?? payload.sessionId ?? payload.uploadId;
   if (!sessionId) permanentPayload();
-  const prepared = await prepareExpiredUploadCleanup(parsed.data.ownerId, sessionId);
+  const prepared = await prepareExpiredUploadCleanup(payload.ownerId, sessionId);
   if (!prepared.shouldCleanup) return;
   if (prepared.session.providerUploadId) {
     await abortMultipart(prepared.file.objectKey, prepared.session.providerUploadId);
@@ -123,33 +129,32 @@ async function processMultipartCleanup(payload: unknown): Promise<void> {
   await deleteObject(prepared.file.objectKey);
 }
 
-async function processUsageReconciliation(payload: unknown): Promise<void> {
-  const parsed = reconcilePayload.safeParse(payload);
-  if (!parsed.success) permanentPayload();
-  await reconcileOwnerUsage(parsed.data.ownerId);
+async function processUsageReconciliation(payload: ReconcilePayload): Promise<void> {
+  await reconcileOwnerUsage(payload.ownerId);
 }
 
 type JobRecord = typeof jobs.$inferSelect;
 
 export async function processClaimedJob(job: JobRecord): Promise<void> {
   if (!isJobKind(job.kind)) permanentPayload();
-  const ownerId = z.string().uuid().parse(job.payload.ownerId);
   if (job.kind === "reconcile_usage") {
-    const connections = await getDb().select({ id: storageConnections.id }).from(storageConnections).where(and(eq(storageConnections.ownerId, ownerId), isNull(storageConnections.disconnectedAt)));
-    for (const connection of connections) await withConnection(connection.id, ownerId, () => processUsageReconciliation(job.payload));
+    const payload = parsePayload(reconcilePayload, job.payload);
+    const connections = await getDb().select({ id: storageConnections.id }).from(storageConnections).where(and(eq(storageConnections.ownerId, payload.ownerId), isNull(storageConnections.disconnectedAt)));
+    for (const connection of connections) await withConnection(connection.id, payload.ownerId, () => processUsageReconciliation(payload));
     return;
   }
-  let id: string | undefined;
   if (job.kind === "purge_file") {
-    const [file] = await getDb().select({ storageId: files.storageId }).from(files).where(and(eq(files.id, z.string().uuid().parse(job.payload.fileId)), eq(files.ownerId, ownerId)));
-    id = file?.storageId;
-  } else {
-    const uploadId = z.string().uuid().parse(job.payload.uploadSessionId ?? job.payload.sessionId ?? job.payload.uploadId);
-    const [upload] = await getDb().select({ storageId: uploadSessions.storageId }).from(uploadSessions).where(and(eq(uploadSessions.id, uploadId), eq(uploadSessions.ownerId, ownerId)));
-    id = upload?.storageId;
+    const payload = parsePayload(purgePayload, job.payload);
+    const [file] = await getDb().select({ storageId: files.storageId }).from(files).where(and(eq(files.id, payload.fileId), eq(files.ownerId, payload.ownerId)));
+    if (!file?.storageId) return;
+    return withConnection(file.storageId, payload.ownerId, () => processPurge(payload));
   }
-  if (!id) return;
-  return withConnection(id, ownerId, () => job.kind === "purge_file" ? processPurge(job.payload) : processMultipartCleanup(job.payload));
+  const payload = parsePayload(cleanupPayload, job.payload);
+  const uploadId = payload.uploadSessionId ?? payload.sessionId ?? payload.uploadId;
+  if (!uploadId) permanentPayload();
+  const [upload] = await getDb().select({ storageId: uploadSessions.storageId }).from(uploadSessions).where(and(eq(uploadSessions.id, uploadId), eq(uploadSessions.ownerId, payload.ownerId)));
+  if (!upload?.storageId) return;
+  return withConnection(upload.storageId, payload.ownerId, () => processMultipartCleanup(payload));
 }
 
 function publicJobKind(value: string): JobRunItem["kind"] {
