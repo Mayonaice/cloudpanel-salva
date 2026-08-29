@@ -1,0 +1,9 @@
+services:
+  salva-transfer-gateway:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./staging:/data/staging
+    ports:
+      - "127.0.0.1:8788:8788"

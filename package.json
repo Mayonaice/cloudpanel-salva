@@ -1,0 +1,44 @@
+{
+  "name": "cloud-salvaweb",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.888.0",
+    "@aws-sdk/s3-request-presigner": "^3.888.0",
+    "@e965/xlsx": "^0.20.3",
+    "bcryptjs": "^3.0.2",
+    "dompurify": "^3.4.14",
+    "drizzle-orm": "^0.45.2",
+    "ipaddr.js": "^2.5.0",
+    "jose": "^6.0.11",
+    "lucide-react": "^0.468.0",
+    "mammoth": "^1.12.2",
+    "next": "^16.3.3",
+    "pg": "^8.16.3",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "webdav": "^5.10.0",
+    "zod": "^4.0.17"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.2.0",
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.11.10",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "drizzle-kit": "^0.31.4",
+    "eslint": "^9.17.0",
+    "eslint-config-next": "^16.3.3",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
