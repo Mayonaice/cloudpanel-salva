@@ -1,0 +1,14 @@
+[Unit]
+Description=Cloud Salva daily maintenance
+After=cloud-salva.service
+Requires=cloud-salva.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+EnvironmentFile=/home/ubuntu/Salva/Apps/CloudSalva/.env.production
+ExecStart=/home/ubuntu/Salva/Dependencies/node/current/bin/node /home/ubuntu/Salva/Apps/CloudSalva/deploy/vps/cloud-jobs.mjs
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+TimeoutStartSec=75

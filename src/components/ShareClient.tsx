@@ -1,39 +1,23 @@
 "use client";
-
 import Logo from "@/components/Logo";
-import { useEffect, useState } from "react";
-import { Download, LockKeyhole } from "lucide-react";
-
+import { useCallback, useEffect, useState } from "react";
+import { Download, File, Folder, LockKeyhole, RefreshCw } from "lucide-react";
+import PreviewContent from "./PreviewContent";
+import { canPreview, type PreviewFile } from "@/lib/preview-format";
+type SharedFile = PreviewFile & { path: string };
+type ShareData = { requiresPassword: boolean; name: string; kind: "file" | "folder"; expiresAt: string; files?: SharedFile[] };
 export default function ShareClient({ token }: { token: string }) {
-  const [data, setData] = useState<{ requiresPassword?: boolean; name?: string; url?: string; expiresAt?: string } | null>(null);
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [unlocking, setUnlocking] = useState(false);
-  async function download() {
-    if (unlocking) return;
-    setUnlocking(true); setError(null);
-    try {
-      const response = await fetch(`/api/shares/${encodeURIComponent(token)}`, password ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password }) } : { cache: "no-store" });
-      const payload = await response.json();
-      if (!response.ok || !payload.url) throw new Error(payload.message ?? "This share is no longer available");
-      window.location.assign(payload.url);
-    } catch (error) { setError(error instanceof Error ? error.message : "Download failed"); }
-    finally { setUnlocking(false); }
-  }
-  useEffect(() => { fetch(`/api/shares/${encodeURIComponent(token)}`).then(async (response) => { const payload = await response.json(); if (!response.ok) setError(payload.message ?? "This share is unavailable"); else setData(payload); }).catch(() => setError("This share is unavailable")); }, [token]);
-  async function unlock(event: React.FormEvent) {
-    event.preventDefault();
-    if (unlocking) return;
-    setUnlocking(true);
-    setError(null);
-    try {
-      const response = await fetch(`/api/shares/${encodeURIComponent(token)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password }) });
-      const payload = await response.json();
-      if (!response.ok) setError(payload.message ?? "Incorrect password");
-      else setData(payload);
-    } catch {
-      setError("Connection failed. Please try again.");
-    } finally { setUnlocking(false); }
-  }
-  return <main className="share-shell"><div className="share-card"><div className="brand-symbol"><Logo size={48} /></div>{error && !data ? <><p className="eyebrow">LINK UNAVAILABLE</p><h1>Nothing to see<br /><em>here.</em></h1><p className="auth-copy">This link may have expired, been revoked, or the file may have moved to trash.</p></> : !data ? <p className="loading-copy">Checking secure link…</p> : data.url ? <><p className="eyebrow">PRIVATE SHARE</p><h1>{data.name}</h1><p className="auth-copy">This file is ready for download. The transfer URL is short-lived and generated only when requested.</p><button className="button button-primary button-wide" disabled={unlocking} onClick={() => void download()}><Download size={17} />{unlocking ? "Preparing…" : "Download file"}</button>{error && <p className="form-error" role="alert">{error}</p>}</> : <><p className="eyebrow">PASSWORD REQUIRED</p><h1>A little<br /><em>privacy check.</em></h1><p className="auth-copy">Enter the password set by the owner to unlock this file.</p><form onSubmit={unlock}>{error && <p role="alert">{error}</p>}<label className="password-field"><LockKeyhole size={16} /><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} aria-label="Share password" placeholder="Share password" autoFocus /></label><button className="button button-primary button-wide" type="submit" disabled={unlocking}>Unlock file <span aria-hidden="true">↗</span></button></form></>}</div></main>;
+  const [data, setData] = useState<ShareData | null>(null), [password, setPassword] = useState(""), [error, setError] = useState(""), [busy, setBusy] = useState(false), [selected, setSelected] = useState("");
+  const endpoint = `/api/shares/${encodeURIComponent(token)}`;
+  const load = useCallback(async () => { setError(""); try { const response = await fetch(endpoint, { cache: "no-store" }); const body = await response.json(); if (!response.ok) throw new Error(body.message ?? "This share is unavailable"); setData(body); setSelected(current => body.files?.some((file: SharedFile) => file.id === current) ? current : body.files?.find((file: SharedFile) => canPreview(file))?.id ?? body.files?.[0]?.id ?? ""); } catch (error) { setError(error instanceof Error ? error.message : "Could not connect. Try again."); } }, [endpoint]);
+  useEffect(() => { const timer = setTimeout(() => void load(), 0); return () => clearTimeout(timer); }, [load]);
+  async function unlock(event: React.FormEvent) { event.preventDefault(); if (busy) return; setBusy(true); setError(""); try { const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password }) }); const body = await response.json(); if (!response.ok) throw new Error(body.message ?? "Could not unlock share"); setPassword(""); setData(body); setSelected(body.files?.find((file: SharedFile) => canPreview(file))?.id ?? body.files?.[0]?.id ?? ""); } catch (error) { setError(error instanceof Error ? error.message : "Could not connect. Try again."); } finally { setBusy(false); } }
+  async function download(file: SharedFile) { if (busy) return; setBusy(true); setError(""); try { const response = await fetch(`${endpoint}?action=download&fileId=${file.id}`, { cache: "no-store" }); const body = await response.json(); if (!response.ok || !body.url) throw new Error(body.message ?? "Could not prepare download"); window.location.assign(body.url); } catch (error) { setError(error instanceof Error ? error.message : "Download failed"); } finally { setBusy(false); } }
+  const file = data?.files?.find(file => file.id === selected);
+  if (!data || data.requiresPassword) return <main className="share-shell"><div className="share-card"><div className="brand-symbol"><Logo size={48} /></div>{!data ? error ? <><p className="eyebrow">SHARE UNAVAILABLE</p><h1>Unable to open<br /><em>this link.</em></h1><p className="auth-copy" role="alert">{error}</p><button className="button button-quiet" onClick={() => void load()}><RefreshCw size={16} />Check again</button></> : <p className="loading-copy">Checking share link…</p> : <><p className="eyebrow">PASSWORD REQUIRED</p><h1>{data.name}</h1><p className="auth-copy">Enter the owner’s password to preview and download this {data.kind}.</p><form onSubmit={unlock}>{error && <p className="form-error" role="alert">{error}</p>}<label className="password-field"><LockKeyhole size={16} /><input type="password" value={password} onChange={event => setPassword(event.target.value)} aria-label="Share password" placeholder="Share password" autoFocus required maxLength={128} /></label><button className="button button-primary button-wide" disabled={busy}>{busy ? "Unlocking…" : "Unlock share"}</button></form></>}</div></main>;
+  return <main className="public-share"><header className="public-share-header"><div className="brand"><Logo size={32} /><span>salva<span className="brand-light"> / cloud</span></span></div><span className="private-note"><LockKeyhole size={14} />Shared {data.kind}</span></header><section className="public-share-heading"><div><p className="eyebrow">SHARED WITH YOU</p><h1>{data.name}</h1><p>{data.kind === "folder" ? `${data.files?.length ?? 0} files · Includes subfolders · ` : ""}Available until {new Date(data.expiresAt).toLocaleString("en", { dateStyle: "medium", timeStyle: "short" })}</p></div><button className="button button-quiet" onClick={() => void load()} aria-label="Refresh shared contents"><RefreshCw size={16} />Refresh</button></section>{error && <p className="notice notice-error" role="alert">{error}</p>}<div className={`public-share-layout ${data.kind === "folder" ? "has-file-list" : ""}`}>
+    {data.kind === "folder" && <aside className="shared-file-list" aria-label="Shared folder files"><h2><Folder size={17} />Folder contents</h2>{data.files?.map(item => <button className={`shared-file-item ${selected === item.id ? "active" : ""}`} key={item.id} onClick={() => setSelected(item.id)}><File size={18} /><span><strong>{item.name}</strong><small>{item.path} · {formatBytes(item.sizeBytes)}</small></span></button>)}{!data.files?.length && <p className="helper">This folder has no available files yet.</p>}</aside>}
+    <section className="shared-preview"><header><div><h2>{file?.name ?? "Folder is empty"}</h2>{file && <p>{formatBytes(file.sizeBytes)} · {file.name.split(".").pop()?.toUpperCase()}</p>}</div>{file && <button className="button button-primary" disabled={busy} onClick={() => void download(file)}><Download size={16} />{busy ? "Preparing…" : "Download"}</button>}</header><div className="shared-preview-body">{file ? canPreview(file) ? <PreviewContent key={file.id} file={file} source={`${endpoint}?action=preview&fileId=${file.id}`} /> : <div className="preview-state preview-error"><File size={32} /><p>Preview is not available for this format.</p><p className="helper">Download the original file to open it.</p></div> : <div className="preview-state">Files added to this folder will appear here.</div>}</div></section>
+  </div></main>;
 }
+function formatBytes(value: number) { return value >= 1e9 ? `${(value / 1e9).toFixed(1)} GB` : value >= 1e6 ? `${(value / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(value / 1e3))} KB`; }

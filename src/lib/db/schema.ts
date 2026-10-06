@@ -1,5 +1,5 @@
-import { relations } from "drizzle-orm";
-import { bigint, index, integer, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { relations, sql } from "drizzle-orm";
+import { bigint, check, index, integer, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 
 export const uploadStatus = pgEnum("cloud_upload_status", ["initiated", "uploading", "completing", "completed", "aborted", "failed"]);
 export const fileStatus = pgEnum("cloud_file_status", ["uploading", "ready", "trashed", "purge_pending", "purged"]);
@@ -107,7 +107,10 @@ export const uploadSessions = pgTable("cloud_upload_sessions", {
 export const shares = pgTable("cloud_shares", {
   id: uuid("id").defaultRandom().primaryKey(),
   ownerId: uuid("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  fileId: uuid("file_id").notNull().references(() => files.id, { onDelete: "cascade" }),
+  fileId: uuid("file_id").references(() => files.id, { onDelete: "cascade" }),
+  folderId: uuid("folder_id").references(() => folders.id, { onDelete: "cascade" }),
+  tokenCiphertext: text("token_ciphertext"),
+  passwordCiphertext: text("password_ciphertext"),
   tokenHash: text("token_hash").notNull(),
   passwordHash: text("password_hash"),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
@@ -115,7 +118,9 @@ export const shares = pgTable("cloud_shares", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
 }, (table) => ({
   tokenUnique: uniqueIndex("cloud_shares_token_hash_unique").on(table.tokenHash),
-  fileIndex: index("cloud_shares_file_idx").on(table.fileId)
+  fileIndex: index("cloud_shares_file_idx").on(table.fileId),
+  folderIndex: index("cloud_shares_folder_idx").on(table.folderId),
+  targetCheck: check("cloud_shares_target_check", sql`num_nonnulls(${table.fileId}, ${table.folderId}) = 1`)
 }));
 
 export const jobs = pgTable("cloud_jobs", {

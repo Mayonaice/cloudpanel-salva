@@ -1,0 +1,21 @@
+[Unit]
+Description=Cloud Salva Next.js
+After=network-online.target postgresql@18-salva.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Salva/Apps/CloudSalva
+EnvironmentFile=/home/ubuntu/Salva/Apps/CloudSalva/.env.production
+Environment=NODE_ENV=production
+ExecStart=/home/ubuntu/Salva/Dependencies/node/current/bin/node node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 8791
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+MemoryMax=850M
+
+[Install]
+WantedBy=multi-user.target

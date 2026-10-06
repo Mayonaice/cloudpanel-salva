@@ -1,0 +1,10 @@
+[Unit]
+Description=Cloud Salva daily maintenance at 00:00 UTC
+
+[Timer]
+OnCalendar=*-*-* 00:00:00 UTC
+Persistent=true
+Unit=cloud-salva-jobs.service
+
+[Install]
+WantedBy=timers.target
